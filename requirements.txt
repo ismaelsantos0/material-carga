@@ -6,3 +6,4 @@ pyjwt
 passlib[bcrypt]
 reportlab
 python-dotenv
+python-multipart
