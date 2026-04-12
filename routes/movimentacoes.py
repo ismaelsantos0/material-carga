@@ -5,7 +5,7 @@ from database import get_db
 import models, schemas
 import io
 from reportlab.pdfgen import canvas
-from auth import get_usuario_atual # Protege as rotas para exigir o login
+from auth import get_usuario_atual # Protege as rotas exigindo login
 
 router = APIRouter(prefix="/movimentacoes", tags=["Movimentações"])
 
@@ -40,23 +40,34 @@ def cautelar_material(
     
     db.commit()
 
-    # 3. Geração do PDF em memória
-    buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer)
-    pdf.drawString(100, 800, "TERMO DE CAUTELA DE MATERIAL")
-    pdf.drawString(100, 780, f"Patrimônio: {material.id_patrimonio} - {material.descricao}")
-    pdf.drawString(100, 760, f"Recebedor: {militar.posto_graduacao} {militar.nome_de_guerra}")
-    pdf.drawString(100, 740, "________________________________________________")
-    pdf.drawString(100, 720, "Assinatura do Recebedor")
-    pdf.save()
-    buffer.seek(0)
-    
-    # Retorna o arquivo PDF direto para o navegador
-    return StreamingResponse(
-        buffer, 
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"inline; filename=cautela_{material.id_patrimonio}.pdf"}
-    )
+    # 3. Geração do PDF protegida e com CORS forçado
+    try:
+        buffer = io.BytesIO()
+        pdf = canvas.Canvas(buffer)
+        pdf.drawString(100, 800, "TERMO DE CAUTELA DE MATERIAL")
+        pdf.drawString(100, 780, f"Patrimônio: {material.id_patrimonio} - {material.descricao}")
+        pdf.drawString(100, 760, f"Recebedor: {militar.posto_graduacao} {militar.nome_de_guerra}")
+        pdf.drawString(100, 740, "________________________________________________")
+        pdf.drawString(100, 720, "Assinatura do Recebedor")
+        pdf.save()
+        buffer.seek(0)
+        
+        # Injeta o CORS diretamente na veia do StreamingResponse
+        headers = {
+            "Content-Disposition": f"inline; filename=cautela_{material.id_patrimonio}.pdf",
+            "Access-Control-Allow-Origin": "*", # Resolve o CORS do Lovable
+            "Access-Control-Expose-Headers": "Content-Disposition" # Permite o front ler o nome do PDF
+        }
+        
+        return StreamingResponse(
+            buffer, 
+            media_type="application/pdf",
+            headers=headers
+        )
+    except Exception as e:
+        # Se falhar a geração do PDF (ex: falta do reportlab), mostra o erro real
+        raise HTTPException(status_code=500, detail=f"Erro interno ao gerar PDF: {str(e)}")
+
 
 @router.post("/devolver")
 def devolver_material(
