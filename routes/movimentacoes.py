@@ -5,7 +5,7 @@ from database import get_db
 import models, schemas
 import io
 from reportlab.pdfgen import canvas
-from auth import get_usuario_atual # Protege as rotas exigindo login
+from auth import get_usuario_atual
 
 router = APIRouter(prefix="/movimentacoes", tags=["Movimentações"])
 
@@ -18,7 +18,6 @@ def cautelar_material(
     material = db.query(models.Material).filter(models.Material.id_patrimonio == dados.id_patrimonio).first()
     militar = db.query(models.Militar).filter(models.Militar.id == dados.id_militar).first()
     
-    # Validações de segurança
     if not material:
         raise HTTPException(status_code=404, detail="Material não encontrado")
     if not militar:
@@ -26,7 +25,7 @@ def cautelar_material(
     if material.situacao == "Em Uso":
         raise HTTPException(status_code=400, detail="Este material já está cautelado!")
 
-    # 1. Registra a movimentação no histórico
+    # Registra o log da movimentação
     nova_movimentacao = models.Movimentacao(
         id_patrimonio=dados.id_patrimonio,
         id_militar=dados.id_militar,
@@ -34,13 +33,13 @@ def cautelar_material(
     )
     db.add(nova_movimentacao)
     
-    # 2. Atualiza o status do material e carimba o responsável
+    # Atualiza material
     material.situacao = "Em Uso"
     material.responsavel = f"{militar.posto_graduacao} {militar.nome_de_guerra}"
     
     db.commit()
 
-    # 3. Geração do PDF protegida e com CORS forçado
+    # Gera PDF
     try:
         buffer = io.BytesIO()
         pdf = canvas.Canvas(buffer)
@@ -52,11 +51,10 @@ def cautelar_material(
         pdf.save()
         buffer.seek(0)
         
-        # Injeta o CORS diretamente na veia do StreamingResponse
         headers = {
             "Content-Disposition": f"inline; filename=cautela_{material.id_patrimonio}.pdf",
-            "Access-Control-Allow-Origin": "*", # Resolve o CORS do Lovable
-            "Access-Control-Expose-Headers": "Content-Disposition" # Permite o front ler o nome do PDF
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Disposition"
         }
         
         return StreamingResponse(
@@ -65,7 +63,6 @@ def cautelar_material(
             headers=headers
         )
     except Exception as e:
-        # Se falhar a geração do PDF (ex: falta do reportlab), mostra o erro real
         raise HTTPException(status_code=500, detail=f"Erro interno ao gerar PDF: {str(e)}")
 
 
@@ -77,21 +74,54 @@ def devolver_material(
 ):
     material = db.query(models.Material).filter(models.Material.id_patrimonio == dados.id_patrimonio).first()
     
-    # Validações
     if not material or material.situacao == "Disponível":
         raise HTTPException(status_code=400, detail="Material já está disponível no estoque.")
 
-    # 1. Registra a devolução no histórico
+    # Registra o log de devolução
     nova_movimentacao = models.Movimentacao(
         id_patrimonio=dados.id_patrimonio,
         tipo_movimentacao="Devolucao"
     )
     db.add(nova_movimentacao)
 
-    # 2. Devolve o material para o estoque e limpa o responsável
+    # Devolve material e limpa responsável
     material.situacao = "Disponível"
     material.responsavel = None 
     
     db.commit()
     
     return {"msg": "Material devolvido ao estoque com sucesso!"}
+
+# === NOVA ROTA DE AUDITORIA / HISTÓRICO ===
+@router.get("/")
+def listar_movimentacoes(db: Session = Depends(get_db)):
+    try:
+        # Puxa tudo ordenado do mais recente para o mais antigo
+        movimentacoes = db.query(models.Movimentacao).order_by(models.Movimentacao.data_hora.desc()).all()
+        
+        historico = []
+        for mov in movimentacoes:
+            # 1. Busca a descrição do material
+            material = db.query(models.Material).filter(models.Material.id_patrimonio == mov.id_patrimonio).first()
+            descricao_mat = material.descricao if material else "Material Desconhecido/Removido"
+            
+            # 2. Busca o nome do militar (se houver)
+            nome_mil = "-"
+            if mov.id_militar:
+                militar = db.query(models.Militar).filter(models.Militar.id == mov.id_militar).first()
+                if militar:
+                    nome_mil = f"{militar.posto_graduacao} {militar.nome_de_guerra}"
+            
+            # 3. Monta o dicionário exato que o frontend pediu
+            historico.append({
+                "id": mov.id,
+                "id_patrimonio": mov.id_patrimonio,
+                "tipo": getattr(mov, 'tipo_movimentacao', getattr(mov, 'tipo', '')), # Converte o nome da coluna para "tipo"
+                "data_hora": str(mov.data_hora) if mov.data_hora else None,
+                "descricao_material": descricao_mat,
+                "nome_militar": nome_mil
+            })
+            
+        return historico
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao carregar histórico: {str(e)}")
