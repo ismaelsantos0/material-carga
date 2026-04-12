@@ -1,64 +1,86 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
 import models, schemas
-from auth import get_usuario_atual
-from services.pdf_generator import gerar_cautela_pdf
-from datetime import datetime
-from fastapi.responses import FileResponse
+import io
+from reportlab.pdfgen import canvas
+from auth import get_usuario_atual # Protege as rotas para exigir o login
 
 router = APIRouter(prefix="/movimentacoes", tags=["Movimentações"])
 
 @router.post("/cautelar")
-def efetuar_cautela(dados: schemas.CautelaCreate, db: Session = Depends(get_db), usuario_atual: dict = Depends(get_usuario_atual)):
-    # 1. Verifica se o item existe e está disponível pelo ID
+def cautelar_material(
+    dados: schemas.CautelaCreate, 
+    db: Session = Depends(get_db), 
+    usuario_atual: dict = Depends(get_usuario_atual)
+):
     material = db.query(models.Material).filter(models.Material.id_patrimonio == dados.id_patrimonio).first()
-    if not material or material.ativo == False:
-        raise HTTPException(status_code=404, detail="Material não encontrado ou baixado.")
-    
     militar = db.query(models.Militar).filter(models.Militar.id == dados.id_militar).first()
     
-    # 2. Registra a movimentação
-    nova_mov = models.Movimentacao(
-        id_patrimonio=material.id_patrimonio,
-        id_militar=militar.id,
-        situacao="Em Uso"
+    # Validações de segurança
+    if not material:
+        raise HTTPException(status_code=404, detail="Material não encontrado")
+    if not militar:
+        raise HTTPException(status_code=404, detail="Militar não encontrado")
+    if material.situacao == "Em Uso":
+        raise HTTPException(status_code=400, detail="Este material já está cautelado!")
+
+    # 1. Registra a movimentação no histórico
+    nova_movimentacao = models.Movimentacao(
+        id_patrimonio=dados.id_patrimonio,
+        id_militar=dados.id_militar,
+        tipo_movimentacao="Cautela"
     )
-    db.add(nova_mov)
+    db.add(nova_movimentacao)
     
-    # 3. A TESTEMUNHA OCULAR: Grava o Log de Auditoria
-    log = models.LogAuditoria(
-        id_usuario=usuario_atual["id"],
-        acao=f"Cautelou para {militar.posto_graduacao} {militar.nome_de_guerra}",
-        id_patrimonio=material.id_patrimonio
-    )
-    db.add(log)
+    # 2. Atualiza o status do material e carimba o responsável
+    material.situacao = "Em Uso"
+    material.responsavel = f"{militar.posto_graduacao} {militar.nome_de_guerra}"
+    
     db.commit()
 
-    # 4. Gera e retorna o PDF
-    pdf_path = gerar_cautela_pdf(material.id_patrimonio, material.descricao, militar.nome_de_guerra, militar.posto_graduacao)
-    return FileResponse(pdf_path, media_type='application/pdf', filename=f"Cautela_{material.id_patrimonio}.pdf")
+    # 3. Geração do PDF em memória
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer)
+    pdf.drawString(100, 800, "TERMO DE CAUTELA DE MATERIAL")
+    pdf.drawString(100, 780, f"Patrimônio: {material.id_patrimonio} - {material.descricao}")
+    pdf.drawString(100, 760, f"Recebedor: {militar.posto_graduacao} {militar.nome_de_guerra}")
+    pdf.drawString(100, 740, "________________________________________________")
+    pdf.drawString(100, 720, "Assinatura do Recebedor")
+    pdf.save()
+    buffer.seek(0)
+    
+    # Retorna o arquivo PDF direto para o navegador
+    return StreamingResponse(
+        buffer, 
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename=cautela_{material.id_patrimonio}.pdf"}
+    )
 
 @router.post("/devolver")
-def devolver_material(dados: schemas.DevolucaoCreate, db: Session = Depends(get_db), usuario_atual: dict = Depends(get_usuario_atual)):
-    # Lógica de devolução seguindo o ID
-    movimentacao_aberta = db.query(models.Movimentacao).filter(
-        models.Movimentacao.id_patrimonio == dados.id_patrimonio,
-        models.Movimentacao.situacao == "Em Uso",
-        models.Movimentacao.data_devolucao == None
-    ).first()
+def devolver_material(
+    dados: schemas.DevolucaoCreate, 
+    db: Session = Depends(get_db),
+    usuario_atual: dict = Depends(get_usuario_atual)
+):
+    material = db.query(models.Material).filter(models.Material.id_patrimonio == dados.id_patrimonio).first()
+    
+    # Validações
+    if not material or material.situacao == "Disponível":
+        raise HTTPException(status_code=400, detail="Material já está disponível no estoque.")
 
-    if not movimentacao_aberta:
-        raise HTTPException(status_code=400, detail="Este material não consta como cautelado.")
-
-    movimentacao_aberta.situacao = "Disponível"
-    movimentacao_aberta.data_devolucao = datetime.utcnow()
-
-    log = models.LogAuditoria(
-        id_usuario=usuario_atual["id"],
-        acao="Descautelou / Devolveu para Estoque",
-        id_patrimonio=dados.id_patrimonio
+    # 1. Registra a devolução no histórico
+    nova_movimentacao = models.Movimentacao(
+        id_patrimonio=dados.id_patrimonio,
+        tipo_movimentacao="Devolucao"
     )
-    db.add(log)
+    db.add(nova_movimentacao)
+
+    # 2. Devolve o material para o estoque e limpa o responsável
+    material.situacao = "Disponível"
+    material.responsavel = None 
+    
     db.commit()
-    return {"msg": "Material devolvido com sucesso."}
+    
+    return {"msg": "Material devolvido ao estoque com sucesso!"}
