@@ -196,6 +196,78 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
+
+# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO POR LOCAL ===
+@app.get("/relatorios/materiais_por_local/pdf", tags=["Relatórios"])
+def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
+    try:
+        materiais = db.query(models.Material).filter(models.Material.ativo == True).all()
+        relatorio = {}
+        
+        for mat in materiais:
+            local = mat.local
+            if mat.tipo == "Ferramental" and (not local or local == "Estoque"):
+                local = "Almox"
+            elif not local:
+                local = "Não Definido"
+                
+            if local not in relatorio:
+                relatorio[local] = []
+            
+            # Formata a linha mostrando se está em uso e por quem
+            status_texto = f"[{mat.situacao}]"
+            if mat.situacao == "Em Uso" and mat.responsavel:
+                status_texto += f" c/ {mat.responsavel}"
+                
+            relatorio[local].append(f"{mat.id_patrimonio} - {mat.descricao} {status_texto}")
+            
+        relatorio_ordenado = sorted(relatorio.items())
+
+        buffer = io.BytesIO()
+        pdf = canvas.Canvas(buffer, pagesize=A4)
+        pdf.setTitle("Inventário por Local")
+
+        y = 800 
+        pdf.setFont("Helvetica-Bold", 16)
+        pdf.drawString(50, y, "Relatório de Inventário por Local")
+        y -= 40
+
+        for local_nome, itens in relatorio_ordenado:
+            if y < 100: 
+                pdf.showPage()
+                y = 800
+
+            pdf.setFont("Helvetica-Bold", 12)
+            pdf.drawString(50, y, f"Local: {local_nome} ({len(itens)} itens)")
+            y -= 20
+
+            pdf.setFont("Helvetica", 10)
+            for item in itens:
+                if y < 50:
+                    pdf.showPage()
+                    y = 800
+                    pdf.setFont("Helvetica", 10)
+                pdf.drawString(70, y, f"• {item}")
+                y -= 15
+            y -= 15
+
+        pdf.save()
+        buffer.seek(0)
+
+        headers = {
+            "Content-Disposition": "inline; filename=inventario_local.pdf",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+
+        return StreamingResponse(
+            buffer, 
+            media_type="application/pdf", 
+            headers=headers
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
 # =================================================
 
 @app.get("/")
