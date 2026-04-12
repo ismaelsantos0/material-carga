@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from database import engine, Base, SessionLocal, get_db
@@ -34,52 +34,65 @@ app.include_router(movimentacoes.router)
 @app.on_event("startup")
 def criar_admin_padrao():
     db = SessionLocal()
-    # Verifica se o admin já existe
-    admin_existe = db.query(models.Usuario).filter(models.Usuario.nome_usuario == "admin").first()
-    
-    if not admin_existe:
-        novo_admin = models.Usuario(
-            nome_usuario="admin",
-            senha_hash=auth.obter_hash_senha("admin123"), # Criptografa a senha "admin123"
-            regra="Admin"
-        )
-        db.add(novo_admin)
-        db.commit()
-        print("Usuário 'admin' criado com sucesso!")
-    db.close()
+    try:
+        # Verifica se o admin já existe
+        admin_existe = db.query(models.Usuario).filter(models.Usuario.nome_usuario == "admin").first()
+        
+        if not admin_existe:
+            novo_admin = models.Usuario(
+                nome_usuario="admin",
+                senha_hash=auth.obter_hash_senha("admin123"), # Criptografa a senha "admin123"
+                regra="Admin"
+            )
+            db.add(novo_admin)
+            db.commit()
+            print("Usuário 'admin' criado com sucesso!")
+    finally:
+        db.close() # Garante que a conexão feche certinho
 # =================================================
 
-# === ROTA DE RELATÓRIO DE DEVEDORES ===
+# === ROTA DE RELATÓRIO DE DEVEDORES (CORRIGIDA E PROTEGIDA) ===
 @app.get("/relatorios/devedores", tags=["Relatórios"])
 def listar_devedores(db: Session = Depends(get_db)):
-    # Puxa todas as movimentações ordenadas da mais recente para a mais antiga
-    movimentacoes = db.query(models.Movimentacao).order_by(models.Movimentacao.data_hora.desc()).all()
-    
-    devedores = []
-    itens_processados = set()
-    
-    for mov in movimentacoes:
-        # Pega apenas o registro mais recente de cada material
-        if mov.id_patrimonio not in itens_processados:
-            itens_processados.add(mov.id_patrimonio)
-            
-            # Verifica se a última movimentação foi uma Cautela
-            # (Trata a variação do nome da coluna caso seja 'tipo' ou 'tipo_movimentacao')
-            tipo_mov = getattr(mov, 'tipo', getattr(mov, 'tipo_movimentacao', ''))
-            
-            if tipo_mov == 'Cautela':
-                material = db.query(models.Material).filter(models.Material.id_patrimonio == mov.id_patrimonio).first()
-                militar = db.query(models.Militar).filter(models.Militar.id == mov.id_militar).first()
+    try:
+        # Puxa todas as movimentações ordenadas da mais recente para a mais antiga
+        movimentacoes = db.query(models.Movimentacao).order_by(models.Movimentacao.data_hora.desc()).all()
+        
+        devedores = []
+        itens_processados = set()
+        
+        for mov in movimentacoes:
+            # Pega apenas o registro mais recente de cada material
+            if mov.id_patrimonio not in itens_processados:
+                itens_processados.add(mov.id_patrimonio)
                 
-                if material and militar:
-                    devedores.append({
-                        "id_patrimonio": material.id_patrimonio,
-                        "descricao": material.descricao,
-                        "responsavel": f"{militar.posto_graduacao} {militar.nome_de_guerra}",
-                        "data_cautela": mov.data_hora.isoformat() if mov.data_hora else None
-                    })
+                # Verifica se a última movimentação foi uma Cautela
+                tipo_mov = getattr(mov, 'tipo', getattr(mov, 'tipo_movimentacao', ''))
+                
+                if tipo_mov == 'Cautela':
+                    material = db.query(models.Material).filter(models.Material.id_patrimonio == mov.id_patrimonio).first()
                     
-    return devedores
+                    # Proteção: Só busca o militar se a movimentação tiver um ID de militar salvo
+                    militar = None
+                    if mov.id_militar:
+                        militar = db.query(models.Militar).filter(models.Militar.id == mov.id_militar).first()
+                    
+                    if material and militar:
+                        # Proteção: Converte a data de forma segura, evitando quebra se já for uma string
+                        data_segura = str(mov.data_hora) if mov.data_hora else None
+                        
+                        devedores.append({
+                            "id_patrimonio": material.id_patrimonio,
+                            "descricao": material.descricao,
+                            "responsavel": f"{militar.posto_graduacao} {militar.nome_de_guerra}",
+                            "data_cautela": data_segura
+                        })
+                        
+        return devedores
+
+    except Exception as e:
+        # Se algo quebrar, a API devolve o erro exato para não ficarmos cegos!
+        raise HTTPException(status_code=500, detail=f"Erro interno no Python: {str(e)}")
 # =================================================
 
 # Rota raiz simples para confirmar status
