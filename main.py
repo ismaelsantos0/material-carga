@@ -58,11 +58,11 @@ def criar_admin_padrao():
 @app.get("/relatorios/devedores", tags=["Relatórios"])
 def listar_devedores(db: Session = Depends(get_db)):
     try:
-        movimentacoes = db.query(models.Movimentacao).order_by(models.Movimentacao.data_hora.desc()).all()
+        movimentacoes_lista = db.query(models.Movimentacao).order_by(models.Movimentacao.data_hora.desc()).all()
         devedores = []
         itens_processados = set()
         
-        for mov in movimentacoes:
+        for mov in movimentacoes_lista:
             if mov.id_patrimonio not in itens_processados:
                 itens_processados.add(mov.id_patrimonio)
                 tipo_mov = getattr(mov, 'tipo', getattr(mov, 'tipo_movimentacao', ''))
@@ -79,7 +79,8 @@ def listar_devedores(db: Session = Depends(get_db)):
                             "id_patrimonio": material.id_patrimonio,
                             "descricao": material.descricao,
                             "responsavel": f"{militar.posto_graduacao} {militar.nome_de_guerra}",
-                            "data_cautela": data_segura
+                            "data_cautela": data_segura,
+                            "observacao": material.observacao
                         })
         return devedores
     except Exception as e:
@@ -99,7 +100,8 @@ def relatorio_devedores_militar(db: Session = Depends(get_db)):
             relatorio[resp].append({
                 "id_patrimonio": mat.id_patrimonio,
                 "descricao": mat.descricao,
-                "tipo": mat.tipo
+                "tipo": mat.tipo,
+                "observacao": mat.observacao # <-- Inserido aqui!
             })
             
         resultado = [{"militar": k, "materiais": v, "total_itens": len(v)} for k, v in relatorio.items()]
@@ -111,10 +113,10 @@ def relatorio_devedores_militar(db: Session = Depends(get_db)):
 @app.get("/relatorios/materiais_por_local", tags=["Relatórios"])
 def relatorio_materiais_local(db: Session = Depends(get_db)):
     try:
-        materiais = db.query(models.Material).filter(models.Material.ativo == True).all()
+        materiais_lista = db.query(models.Material).filter(models.Material.ativo == True).all()
         relatorio = {}
         
-        for mat in materiais:
+        for mat in materiais_lista:
             local = mat.local
             if mat.tipo == "Ferramental" and (not local or local == "Estoque"):
                 local = "Almox"
@@ -128,7 +130,8 @@ def relatorio_materiais_local(db: Session = Depends(get_db)):
                 "descricao": mat.descricao,
                 "situacao": mat.situacao,
                 "responsavel": mat.responsavel,
-                "tipo": mat.tipo
+                "tipo": mat.tipo,
+                "observacao": mat.observacao # <-- Inserido aqui!
             })
             
         resultado = [{"local": k, "materiais": v, "total_itens": len(v)} for k, v in relatorio.items()]
@@ -147,7 +150,10 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
             resp = mat.responsavel or "Militar Desconhecido"
             if resp not in relatorio:
                 relatorio[resp] = []
-            relatorio[resp].append(f"{mat.id_patrimonio} - {mat.descricao}")
+            
+            # Adiciona a observação no PDF se ela existir
+            obs_texto = f" (Obs: {mat.observacao})" if mat.observacao else ""
+            relatorio[resp].append(f"{mat.id_patrimonio} - {mat.descricao}{obs_texto}")
             
         relatorio_ordenado = sorted(relatorio.items())
 
@@ -201,10 +207,10 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
 @app.get("/relatorios/materiais_por_local/pdf", tags=["Relatórios"])
 def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
     try:
-        materiais = db.query(models.Material).filter(models.Material.ativo == True).all()
+        materiais_lista = db.query(models.Material).filter(models.Material.ativo == True).all()
         relatorio = {}
         
-        for mat in materiais:
+        for mat in materiais_lista:
             local = mat.local
             if mat.tipo == "Ferramental" and (not local or local == "Estoque"):
                 local = "Almox"
@@ -214,12 +220,14 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
             if local not in relatorio:
                 relatorio[local] = []
             
-            # Formata a linha mostrando se está em uso e por quem
             status_texto = f"[{mat.situacao}]"
             if mat.situacao == "Em Uso" and mat.responsavel:
                 status_texto += f" c/ {mat.responsavel}"
+            
+            # Adiciona a observação no PDF se ela existir
+            obs_texto = f" - Obs: {mat.observacao}" if mat.observacao else ""
                 
-            relatorio[local].append(f"{mat.id_patrimonio} - {mat.descricao} {status_texto}")
+            relatorio[local].append(f"{mat.id_patrimonio} - {mat.descricao} {status_texto}{obs_texto}")
             
         relatorio_ordenado = sorted(relatorio.items())
 
