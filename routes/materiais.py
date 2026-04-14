@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
+import uuid # <-- Ferramenta do Python para gerar IDs únicos
 from database import get_db
 import models, schemas
 
@@ -9,11 +10,27 @@ router = APIRouter(prefix="/materiais", tags=["Materiais"])
 @router.post("/")
 def cadastrar_material(dados: schemas.MaterialCreate, db: Session = Depends(get_db)):
     try:
-        # Verifica se o material já existe pelo ID do Patrimônio
+        # === TRAVA DE AUTOMAÇÃO 1: ID Automático e Local Nulo ===
+        if dados.tipo == "Ferramental de Consumo":
+            dados.local = None
+            # Gera um código único (ex: CONS-4F8A2C)
+            dados.id_patrimonio = f"CONS-{uuid.uuid4().hex[:6].upper()}"
+        
+        # Se NÃO for consumo, o ID é obrigatório (Carga normal)
+        elif not dados.id_patrimonio:
+            raise HTTPException(status_code=400, detail="O ID do Patrimônio é obrigatório para materiais de Carga.")
+
         if db.query(models.Material).filter(models.Material.id_patrimonio == dados.id_patrimonio).first():
             raise HTTPException(status_code=400, detail="Este Patrimônio já está cadastrado.")
         
-        novo_material = models.Material(**dados.dict())
+        novo_material = models.Material(
+            id_patrimonio=dados.id_patrimonio,
+            descricao=dados.descricao,
+            valor=dados.valor,
+            tipo=dados.tipo,
+            local=dados.local,
+            observacao=dados.observacao
+        )
         db.add(novo_material)
         db.commit()
         return {"msg": "Material cadastrado com sucesso!"}
@@ -23,18 +40,21 @@ def cadastrar_material(dados: schemas.MaterialCreate, db: Session = Depends(get_
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno ao cadastrar: {str(e)}")
 
-# === ROTA: CADASTRAR MATERIAL EM LOTE (CONSUMO) ===
 @router.post("/lote")
 def cadastrar_material_lote(dados: schemas.MaterialLoteCreate, db: Session = Depends(get_db)):
     try:
+        # === TRAVA DE AUTOMAÇÃO 2: Lote 100% autônomo ===
+        if dados.tipo == "Ferramental de Consumo":
+            dados.local = None
+
         materiais_criados = []
-        for i in range(1, dados.quantidade + 1):
-            # Formata o ID com zeros à esquerda: ENX-001, ENX-002, etc.
-            id_gerado = f"{dados.prefixo_id}-{i:03d}"
+        for _ in range(dados.quantidade):
+            # O sistema gera IDs até completar a quantidade pedida
+            id_gerado = f"CONS-{uuid.uuid4().hex[:6].upper()}"
             
-            # Verifica se já existe para não dar conflito
-            if db.query(models.Material).filter(models.Material.id_patrimonio == id_gerado).first():
-                continue
+            # Garantia dupla para evitar raríssimas colisões do UUID
+            while db.query(models.Material).filter(models.Material.id_patrimonio == id_gerado).first():
+                id_gerado = f"CONS-{uuid.uuid4().hex[:6].upper()}"
 
             novo_material = models.Material(
                 id_patrimonio=id_gerado,
@@ -48,7 +68,7 @@ def cadastrar_material_lote(dados: schemas.MaterialLoteCreate, db: Session = Dep
             materiais_criados.append(id_gerado)
         
         db.commit()
-        return {"msg": f"{len(materiais_criados)} itens gerados e cadastrados com sucesso!", "ids": materiais_criados}
+        return {"msg": f"{len(materiais_criados)} itens gerados com sucesso!", "ids": materiais_criados}
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno ao cadastrar lote: {str(e)}")
@@ -66,7 +86,9 @@ def listar_materiais(local: Optional[str] = None, db: Session = Depends(get_db))
 @router.put("/{id_patrimonio}")
 def editar_material(id_patrimonio: str, dados: schemas.MaterialCreate, db: Session = Depends(get_db)):
     try:
-        # Busca o material estritamente pelo ID
+        if dados.tipo == "Ferramental de Consumo":
+            dados.local = None
+
         material = db.query(models.Material).filter(models.Material.id_patrimonio == id_patrimonio).first()
         if not material:
             raise HTTPException(status_code=404, detail="Material não encontrado")
