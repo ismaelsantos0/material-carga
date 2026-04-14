@@ -2,16 +2,20 @@ import io
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4, landscape
 from sqlalchemy.orm import Session
+
+# Novos imports para gerar Tabelas Profissionais no PDF
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 
 from database import engine, Base, SessionLocal, get_db
 from routes import movimentacoes, materiais, militares
 import auth
 import models
 
-# Cria as tabelas no banco de dados automaticamente (apenas as tabelas novas)
+# Cria as tabelas no banco de dados automaticamente
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -20,7 +24,6 @@ app = FastAPI(
     version="1.0"
 )
 
-# Configuração de CORS - Essencial para o frontend (Lovable) não ser bloqueado
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -29,13 +32,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Conectando todas as rotas
 app.include_router(auth.router)
 app.include_router(materiais.router)
 app.include_router(militares.router)
 app.include_router(movimentacoes.router)
 
-# === A MÁGICA DE CRIAR O ADMIN AUTOMATICAMENTE ===
 @app.on_event("startup")
 def criar_admin_padrao():
     db = SessionLocal()
@@ -49,12 +50,10 @@ def criar_admin_padrao():
             )
             db.add(novo_admin)
             db.commit()
-            print("Usuário 'admin' criado com sucesso!")
     finally:
         db.close()
-# =================================================
 
-# === RELATÓRIO 1: DEVEDORES GERAL (Histórico) ===
+# === RELATÓRIOS EM JSON (PARA A TELA DO SITE) ===
 @app.get("/relatorios/devedores", tags=["Relatórios"])
 def listar_devedores(db: Session = Depends(get_db)):
     try:
@@ -84,15 +83,13 @@ def listar_devedores(db: Session = Depends(get_db)):
                         })
         return devedores
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro interno no Python: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
-# === RELATÓRIO 2: DEVEDORES POR MILITAR (Agrupado) ===
 @app.get("/relatorios/devedores_por_militar", tags=["Relatórios"])
 def relatorio_devedores_militar(db: Session = Depends(get_db)):
     try:
         materiais_em_uso = db.query(models.Material).filter(models.Material.situacao == "Em Uso").all()
         relatorio = {}
-        
         for mat in materiais_em_uso:
             resp = mat.responsavel or "Militar Desconhecido"
             if resp not in relatorio:
@@ -103,19 +100,16 @@ def relatorio_devedores_militar(db: Session = Depends(get_db)):
                 "tipo": mat.tipo,
                 "observacao": mat.observacao
             })
-            
         resultado = [{"militar": k, "materiais": v, "total_itens": len(v)} for k, v in relatorio.items()]
         return sorted(resultado, key=lambda x: x["militar"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
-# === RELATÓRIO 3: INVENTÁRIO POR LOCAL (Agrupado) ===
 @app.get("/relatorios/materiais_por_local", tags=["Relatórios"])
 def relatorio_materiais_local(db: Session = Depends(get_db)):
     try:
         materiais_lista = db.query(models.Material).filter(models.Material.ativo == True).all()
         relatorio = {}
-        
         for mat in materiais_lista:
             local = mat.local
             if mat.tipo == "Ferramental" and (not local or local == "Estoque"):
@@ -133,13 +127,12 @@ def relatorio_materiais_local(db: Session = Depends(get_db)):
                 "tipo": mat.tipo,
                 "observacao": mat.observacao
             })
-            
         resultado = [{"local": k, "materiais": v, "total_itens": len(v)} for k, v in relatorio.items()]
         return sorted(resultado, key=lambda x: x["local"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
-# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES (RETRATO) ===
+# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES (TABELA PROFISSIONAL) ===
 @app.get("/relatorios/devedores_por_militar/pdf", tags=["Relatórios"])
 def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     try:
@@ -150,59 +143,64 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
             resp = mat.responsavel or "Militar Desconhecido"
             if resp not in relatorio:
                 relatorio[resp] = []
-            
-            obs_texto = f" (Obs: {mat.observacao})" if mat.observacao else ""
-            relatorio[resp].append(f"{mat.id_patrimonio} - {mat.descricao}{obs_texto}")
+            relatorio[resp].append({
+                "id": mat.id_patrimonio,
+                "desc": mat.descricao,
+                "obs": mat.observacao or ""
+            })
             
         relatorio_ordenado = sorted(relatorio.items())
-
         buffer = io.BytesIO()
-        pdf = canvas.Canvas(buffer, pagesize=A4)
-        pdf.setTitle("Relatório de Devedores")
+        
+        # Cria o documento
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+        elements = []
+        styles = getSampleStyleSheet()
 
-        y = 800 
-        pdf.setFont("Helvetica-Bold", 16)
-        pdf.drawString(50, y, "Relatório de Materiais Cautelados por Militar")
-        y -= 40
+        elements.append(Paragraph("<b>Relatório de Materiais Cautelados por Militar</b>", styles['Heading1']))
+        elements.append(Spacer(1, 12))
 
         for militar, itens in relatorio_ordenado:
-            if y < 100: 
-                pdf.showPage()
-                y = 800
-
-            pdf.setFont("Helvetica-Bold", 12)
-            pdf.drawString(50, y, f"Responsável: {militar} ({len(itens)} itens pendentes)")
-            y -= 20
-
-            pdf.setFont("Helvetica", 10)
+            elements.append(Paragraph(f"<b>Responsável: {militar} ({len(itens)} itens pendentes)</b>", styles['Heading3']))
+            
+            # Monta o cabeçalho da tabela
+            data = [['Patrimônio', 'Descrição', 'Observação']]
+            
+            # Preenche as linhas quebrando o texto automaticamente
             for item in itens:
-                if y < 50:
-                    pdf.showPage()
-                    y = 800
-                    pdf.setFont("Helvetica", 10)
-                pdf.drawString(70, y, f"• {item}")
-                y -= 15
-            y -= 15
+                data.append([
+                    item["id"], 
+                    Paragraph(item["desc"], styles['Normal']), 
+                    Paragraph(item["obs"], styles['Normal'])
+                ])
+            
+            # Desenha a tabela com as divisórias e cores
+            t = Table(data, colWidths=[80, 280, 170])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2d3748")), # Fundo escuro no cabeçalho
+                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('BOTTOMPADDING', (0,0), (-1,0), 10),
+                ('TOPPADDING', (0,0), (-1,0), 10),
+                ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                ('GRID', (0,0), (-1,-1), 1, colors.black), # Aqui entra a divisória
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf2f7")]) # Linhas zebradas
+            ]))
+            elements.append(t)
+            elements.append(Spacer(1, 20))
 
-        pdf.save()
+        doc.build(elements)
         buffer.seek(0)
-
-        headers = {
-            "Content-Disposition": "inline; filename=relatorio_devedores.pdf",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "Content-Disposition"
-        }
-
-        return StreamingResponse(
-            buffer, 
-            media_type="application/pdf", 
-            headers=headers
-        )
+        
+        headers = {"Content-Disposition": "inline; filename=relatorio_devedores.pdf"}
+        return StreamingResponse(buffer, media_type="application/pdf", headers=headers)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
 
-# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO POR LOCAL (PAISAGEM/DEITADO) ===
+# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO (TABELA PAISAGEM) ===
 @app.get("/relatorios/materiais_por_local/pdf", tags=["Relatórios"])
 def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
     try:
@@ -221,60 +219,65 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
             
             status_texto = f"[{mat.situacao}]"
             if mat.situacao == "Em Uso" and mat.responsavel:
-                status_texto += f" c/ {mat.responsavel}"
-            
-            obs_texto = f" - Obs: {mat.observacao}" if mat.observacao else ""
+                status_texto += f"\n c/ {mat.responsavel}" # Quebra de linha pro nome ficar embaixo do status
                 
-            relatorio[local].append(f"{mat.id_patrimonio} - {mat.descricao} {status_texto}{obs_texto}")
+            relatorio[local].append({
+                "id": mat.id_patrimonio,
+                "desc": mat.descricao,
+                "status": status_texto,
+                "obs": mat.observacao or ""
+            })
             
         relatorio_ordenado = sorted(relatorio.items())
-
         buffer = io.BytesIO()
-        pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
-        pdf.setTitle("Inventário por Local")
+        
+        # Modo Paisagem com o motor de tabelas
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+        elements = []
+        styles = getSampleStyleSheet()
 
-        y = 530 
-        pdf.setFont("Helvetica-Bold", 16)
-        pdf.drawString(50, y, "Relatório de Inventário por Local")
-        y -= 40
+        elements.append(Paragraph("<b>Relatório de Inventário por Local</b>", styles['Heading1']))
+        elements.append(Spacer(1, 12))
 
         for local_nome, itens in relatorio_ordenado:
-            if y < 80: 
-                pdf.showPage()
-                y = 530
-
-            pdf.setFont("Helvetica-Bold", 12)
-            pdf.drawString(50, y, f"Local: {local_nome} ({len(itens)} itens)")
-            y -= 25
-
-            pdf.setFont("Helvetica", 10)
+            elements.append(Paragraph(f"<b>Local: {local_nome} ({len(itens)} itens)</b>", styles['Heading3']))
+            
+            # Cabeçalho da Tabela
+            data = [['Patrimônio', 'Descrição', 'Status / Responsável', 'Observação (Sala exata)']]
+            
             for item in itens:
-                if y < 50:
-                    pdf.showPage()
-                    y = 530
-                    pdf.setFont("Helvetica", 10)
-                pdf.drawString(70, y, f"• {item}")
-                y -= 20
-            y -= 25
+                data.append([
+                    item["id"], 
+                    Paragraph(item["desc"], styles['Normal']), 
+                    Paragraph(item["status"], styles['Normal']),
+                    Paragraph(item["obs"], styles['Normal'])
+                ])
+            
+            # Larguras das colunas adaptadas para folha A4 Deitada
+            t = Table(data, colWidths=[80, 380, 140, 180])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2d3748")), # Fundo escuro no cabeçalho
+                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('BOTTOMPADDING', (0,0), (-1,0), 10),
+                ('TOPPADDING', (0,0), (-1,0), 10),
+                ('BACKGROUND', (0,1), (-1,-1), colors.white),
+                ('GRID', (0,0), (-1,-1), 1, colors.black), # Grade (divisórias) visível
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf2f7")]) # Linhas zebradas
+            ]))
+            elements.append(t)
+            elements.append(Spacer(1, 25))
 
-        pdf.save()
+        doc.build(elements)
         buffer.seek(0)
-
-        headers = {
-            "Content-Disposition": "inline; filename=inventario_local.pdf",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "Content-Disposition"
-        }
-
-        return StreamingResponse(
-            buffer, 
-            media_type="application/pdf", 
-            headers=headers
-        )
+        
+        headers = {"Content-Disposition": "inline; filename=inventario_local.pdf"}
+        return StreamingResponse(buffer, media_type="application/pdf", headers=headers)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
-# =================================================
 
 @app.get("/")
 def read_root():
