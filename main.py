@@ -15,7 +15,7 @@ import models
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="Sistema Carga e Ferramental", 
+    title="Sistema Vero - Controle de Material", 
     description="Sistema de gestão de patrimônio, cautelas e auditoria",
     version="1.0"
 )
@@ -101,7 +101,7 @@ def relatorio_devedores_militar(db: Session = Depends(get_db)):
                 "id_patrimonio": mat.id_patrimonio,
                 "descricao": mat.descricao,
                 "tipo": mat.tipo,
-                "observacao": mat.observacao # <-- Inserido aqui!
+                "observacao": mat.observacao
             })
             
         resultado = [{"militar": k, "materiais": v, "total_itens": len(v)} for k, v in relatorio.items()]
@@ -131,7 +131,7 @@ def relatorio_materiais_local(db: Session = Depends(get_db)):
                 "situacao": mat.situacao,
                 "responsavel": mat.responsavel,
                 "tipo": mat.tipo,
-                "observacao": mat.observacao # <-- Inserido aqui!
+                "observacao": mat.observacao
             })
             
         resultado = [{"local": k, "materiais": v, "total_itens": len(v)} for k, v in relatorio.items()]
@@ -139,7 +139,7 @@ def relatorio_materiais_local(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
-# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES ===
+# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES (RETRATO) ===
 @app.get("/relatorios/devedores_por_militar/pdf", tags=["Relatórios"])
 def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     try:
@@ -151,7 +151,6 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
             if resp not in relatorio:
                 relatorio[resp] = []
             
-            # Adiciona a observação no PDF se ela existir
             obs_texto = f" (Obs: {mat.observacao})" if mat.observacao else ""
             relatorio[resp].append(f"{mat.id_patrimonio} - {mat.descricao}{obs_texto}")
             
@@ -203,7 +202,7 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
 
-# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO POR LOCAL ===
+# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO POR LOCAL (PAISAGEM/DEITADO) ===
 @app.get("/relatorios/materiais_por_local/pdf", tags=["Relatórios"])
 def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
     try:
@@ -224,7 +223,6 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
             if mat.situacao == "Em Uso" and mat.responsavel:
                 status_texto += f" c/ {mat.responsavel}"
             
-            # Adiciona a observação no PDF se ela existir
             obs_texto = f" - Obs: {mat.observacao}" if mat.observacao else ""
                 
             relatorio[local].append(f"{mat.id_patrimonio} - {mat.descricao} {status_texto}{obs_texto}")
@@ -232,32 +230,32 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
         relatorio_ordenado = sorted(relatorio.items())
 
         buffer = io.BytesIO()
-        pdf = canvas.Canvas(buffer, pagesize=A4)
+        pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
         pdf.setTitle("Inventário por Local")
 
-        y = 800 
+        y = 530 
         pdf.setFont("Helvetica-Bold", 16)
         pdf.drawString(50, y, "Relatório de Inventário por Local")
         y -= 40
 
         for local_nome, itens in relatorio_ordenado:
-            if y < 100: 
+            if y < 80: 
                 pdf.showPage()
-                y = 800
+                y = 530
 
             pdf.setFont("Helvetica-Bold", 12)
             pdf.drawString(50, y, f"Local: {local_nome} ({len(itens)} itens)")
-            y -= 20
+            y -= 25
 
             pdf.setFont("Helvetica", 10)
             for item in itens:
                 if y < 50:
                     pdf.showPage()
-                    y = 800
+                    y = 530
                     pdf.setFont("Helvetica", 10)
                 pdf.drawString(70, y, f"• {item}")
-                y -= 15
-            y -= 15
+                y -= 20
+            y -= 25
 
         pdf.save()
         buffer.seek(0)
