@@ -7,6 +7,7 @@ class MaterialCreate(BaseModel):
     valor: str
     tipo: str
     local: Optional[str] = "Estoque"
+    observacao: Optional[str] = None # <-- Permite o Lovable enviar a observação
 
 class MilitarCreate(BaseModel):
     cpf: str
@@ -23,3 +24,4 @@ class CautelaCreate(BaseModel):
 
 class DevolucaoCreate(BaseModel):
     id_patrimonio: str
+    
