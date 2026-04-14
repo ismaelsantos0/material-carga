@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-# Novos imports para gerar Tabelas Profissionais no PDF
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
@@ -15,7 +14,6 @@ from routes import movimentacoes, materiais, militares
 import auth
 import models
 
-# Cria as tabelas no banco de dados automaticamente
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -53,7 +51,7 @@ def criar_admin_padrao():
     finally:
         db.close()
 
-# === RELATÓRIOS EM JSON (PARA A TELA DO SITE) ===
+# === RELATÓRIO 1: DEVEDORES GERAL ===
 @app.get("/relatorios/devedores", tags=["Relatórios"])
 def listar_devedores(db: Session = Depends(get_db)):
     try:
@@ -85,6 +83,7 @@ def listar_devedores(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
+# === RELATÓRIO 2: DEVEDORES POR MILITAR (Mostra tudo, inclusive consumo) ===
 @app.get("/relatorios/devedores_por_militar", tags=["Relatórios"])
 def relatorio_devedores_militar(db: Session = Depends(get_db)):
     try:
@@ -105,12 +104,18 @@ def relatorio_devedores_militar(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
+# === RELATÓRIO 3: INVENTÁRIO POR LOCAL (TELA) ===
 @app.get("/relatorios/materiais_por_local", tags=["Relatórios"])
 def relatorio_materiais_local(db: Session = Depends(get_db)):
     try:
         materiais_lista = db.query(models.Material).filter(models.Material.ativo == True).all()
         relatorio = {}
         for mat in materiais_lista:
+            
+            # REGRA NOVA: Ignora se for material de consumo
+            if mat.tipo and "Consumo" in mat.tipo:
+                continue
+
             local = mat.local
             if mat.tipo == "Ferramental" and (not local or local == "Estoque"):
                 local = "Almox"
@@ -132,7 +137,7 @@ def relatorio_materiais_local(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
-# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES (TABELA PROFISSIONAL) ===
+# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES ===
 @app.get("/relatorios/devedores_por_militar/pdf", tags=["Relatórios"])
 def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     try:
@@ -152,7 +157,6 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
         relatorio_ordenado = sorted(relatorio.items())
         buffer = io.BytesIO()
         
-        # Cria o documento
         doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
         elements = []
         styles = getSampleStyleSheet()
@@ -163,10 +167,7 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
         for militar, itens in relatorio_ordenado:
             elements.append(Paragraph(f"<b>Responsável: {militar} ({len(itens)} itens pendentes)</b>", styles['Heading3']))
             
-            # Monta o cabeçalho da tabela
             data = [['Patrimônio', 'Descrição', 'Observação']]
-            
-            # Preenche as linhas quebrando o texto automaticamente
             for item in itens:
                 data.append([
                     item["id"], 
@@ -174,19 +175,18 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
                     Paragraph(item["obs"], styles['Normal'])
                 ])
             
-            # Desenha a tabela com as divisórias e cores
             t = Table(data, colWidths=[80, 280, 170])
             t.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2d3748")), # Fundo escuro no cabeçalho
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2d3748")),
                 ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                 ('ALIGN', (0,0), (-1,-1), 'LEFT'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
                 ('BOTTOMPADDING', (0,0), (-1,0), 10),
                 ('TOPPADDING', (0,0), (-1,0), 10),
                 ('BACKGROUND', (0,1), (-1,-1), colors.white),
-                ('GRID', (0,0), (-1,-1), 1, colors.black), # Aqui entra a divisória
+                ('GRID', (0,0), (-1,-1), 1, colors.black),
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf2f7")]) # Linhas zebradas
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf2f7")])
             ]))
             elements.append(t)
             elements.append(Spacer(1, 20))
@@ -200,7 +200,7 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
 
-# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO (TABELA PAISAGEM) ===
+# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO (PDF) ===
 @app.get("/relatorios/materiais_por_local/pdf", tags=["Relatórios"])
 def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
     try:
@@ -208,6 +208,11 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
         relatorio = {}
         
         for mat in materiais_lista:
+            
+            # REGRA NOVA: Ignora se for material de consumo também no PDF
+            if mat.tipo and "Consumo" in mat.tipo:
+                continue
+
             local = mat.local
             if mat.tipo == "Ferramental" and (not local or local == "Estoque"):
                 local = "Almox"
@@ -219,7 +224,7 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
             
             status_texto = f"[{mat.situacao}]"
             if mat.situacao == "Em Uso" and mat.responsavel:
-                status_texto += f"\n c/ {mat.responsavel}" # Quebra de linha pro nome ficar embaixo do status
+                status_texto += f"\n c/ {mat.responsavel}"
                 
             relatorio[local].append({
                 "id": mat.id_patrimonio,
@@ -231,7 +236,6 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
         relatorio_ordenado = sorted(relatorio.items())
         buffer = io.BytesIO()
         
-        # Modo Paisagem com o motor de tabelas
         doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
         elements = []
         styles = getSampleStyleSheet()
@@ -242,7 +246,6 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
         for local_nome, itens in relatorio_ordenado:
             elements.append(Paragraph(f"<b>Local: {local_nome} ({len(itens)} itens)</b>", styles['Heading3']))
             
-            # Cabeçalho da Tabela
             data = [['Patrimônio', 'Descrição', 'Status / Responsável', 'Observação (Sala exata)']]
             
             for item in itens:
@@ -253,19 +256,18 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
                     Paragraph(item["obs"], styles['Normal'])
                 ])
             
-            # Larguras das colunas adaptadas para folha A4 Deitada
             t = Table(data, colWidths=[80, 380, 140, 180])
             t.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2d3748")), # Fundo escuro no cabeçalho
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2d3748")),
                 ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                 ('ALIGN', (0,0), (-1,-1), 'LEFT'),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
                 ('BOTTOMPADDING', (0,0), (-1,0), 10),
                 ('TOPPADDING', (0,0), (-1,0), 10),
                 ('BACKGROUND', (0,1), (-1,-1), colors.white),
-                ('GRID', (0,0), (-1,-1), 1, colors.black), # Grade (divisórias) visível
+                ('GRID', (0,0), (-1,-1), 1, colors.black),
                 ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf2f7")]) # Linhas zebradas
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf2f7")])
             ]))
             elements.append(t)
             elements.append(Spacer(1, 25))
