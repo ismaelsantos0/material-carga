@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 class MaterialCreate(BaseModel):
     id_patrimonio: str
@@ -7,7 +7,7 @@ class MaterialCreate(BaseModel):
     valor: str
     tipo: str
     local: Optional[str] = "Estoque"
-    observacao: Optional[str] = None # <-- Permite o Lovable enviar a observação
+    observacao: Optional[str] = None
 
 class MilitarCreate(BaseModel):
     cpf: str
@@ -24,4 +24,21 @@ class CautelaCreate(BaseModel):
 
 class DevolucaoCreate(BaseModel):
     id_patrimonio: str
-    
+
+# === NOVOS SCHEMAS PARA LOTE E SELEÇÃO MÚLTIPLA ===
+
+class MaterialLoteCreate(BaseModel):
+    prefixo_id: str
+    descricao: str
+    valor: str
+    tipo: str
+    local: Optional[str] = "Almox"
+    observacao: Optional[str] = None
+    quantidade: int
+
+class CautelaMultiplaCreate(BaseModel):
+    ids_patrimonio: List[str]
+    id_militar: int
+
+class DevolucaoMultiplaCreate(BaseModel):
+    ids_patrimonio: List[str]
