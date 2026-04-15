@@ -8,3 +8,4 @@ bcrypt==4.0.1
 reportlab
 python-dotenv
 python-multipart
+Pillow==10.2.0
