@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 class MaterialCreate(BaseModel):
-    id_patrimonio: Optional[str] = None # <-- Agora é opcional! O sistema pode criar.
+    id_patrimonio: Optional[str] = None
     descricao: str
     valor: str
     tipo: str
@@ -21,14 +21,15 @@ class MilitarCreate(BaseModel):
 class CautelaCreate(BaseModel):
     id_patrimonio: str
     id_militar: int
+    usuario_logado: Optional[str] = "Sistema"
 
 class DevolucaoCreate(BaseModel):
     id_patrimonio: str
+    usuario_logado: Optional[str] = "Sistema"
 
 # === SCHEMAS PARA LOTE E SELEÇÃO MÚLTIPLA ===
 
 class MaterialLoteCreate(BaseModel):
-    # Removido o prefixo_id. O sistema faz sozinho agora.
     descricao: str
     valor: str
     tipo: str
@@ -39,6 +40,8 @@ class MaterialLoteCreate(BaseModel):
 class CautelaMultiplaCreate(BaseModel):
     ids_patrimonio: List[str]
     id_militar: int
+    usuario_logado: Optional[str] = "Sistema"
 
 class DevolucaoMultiplaCreate(BaseModel):
     ids_patrimonio: List[str]
+    usuario_logado: Optional[str] = "Sistema"
