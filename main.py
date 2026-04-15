@@ -2,9 +2,10 @@ import io
 import os
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response # <-- MUDANÇA AQUI
+from fastapi.responses import Response 
 from sqlalchemy.orm import Session
 
+# Imports para gerar Tabelas e Imagens Profissionais no PDF
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -16,6 +17,7 @@ from routes import movimentacoes, materiais, militares
 import auth
 import models
 
+# Cria as tabelas no banco de dados automaticamente
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -53,6 +55,7 @@ def criar_admin_padrao():
     finally:
         db.close()
 
+# === RELATÓRIO 1: DEVEDORES GERAL ===
 @app.get("/relatorios/devedores", tags=["Relatórios"])
 def listar_devedores(db: Session = Depends(get_db)):
     try:
@@ -84,6 +87,7 @@ def listar_devedores(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
+# === RELATÓRIO 2: DEVEDORES POR MILITAR ===
 @app.get("/relatorios/devedores_por_militar", tags=["Relatórios"])
 def relatorio_devedores_militar(db: Session = Depends(get_db)):
     try:
@@ -104,12 +108,15 @@ def relatorio_devedores_militar(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
+# === RELATÓRIO 3: INVENTÁRIO POR LOCAL (TELA) ===
 @app.get("/relatorios/materiais_por_local", tags=["Relatórios"])
 def relatorio_materiais_local(db: Session = Depends(get_db)):
     try:
         materiais_lista = db.query(models.Material).filter(models.Material.ativo == True).all()
         relatorio = {}
         for mat in materiais_lista:
+            
+            # REGRA: Ignora se for material de consumo
             if mat.tipo and "Consumo" in mat.tipo:
                 continue
 
@@ -134,6 +141,7 @@ def relatorio_materiais_local(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
+# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES (GERAL) ===
 @app.get("/relatorios/devedores_por_militar/pdf", tags=["Relatórios"])
 def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     try:
@@ -192,6 +200,7 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
 
+# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO (POR LOCAL) ===
 @app.get("/relatorios/materiais_por_local/pdf", tags=["Relatórios"])
 def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
     try:
@@ -265,6 +274,7 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
 
+# === ROTA: GERAR TERMO DE CAUTELA INDIVIDUAL COM LOGO CORRIGIDA ===
 @app.get("/relatorios/termo_cautela/{id_militar}/pdf", tags=["Relatórios"])
 def gerar_termo_cautela_pdf(id_militar: int, db: Session = Depends(get_db)):
     try:
@@ -287,9 +297,23 @@ def gerar_termo_cautela_pdf(id_militar: int, db: Session = Depends(get_db)):
 
         logo_path = "capa_acolhida.png" 
         if os.path.exists(logo_path):
-            img = Image(logo_path, width=120, height=120)
+            # A MÁGICA DA PROPORÇÃO ESTÁ AQUI:
+            # Tenta carregar a imagem para saber as dimensões originais
+            img_obj = Image(logo_path)
+            orig_w, orig_h = img_obj.getSize()
+
+            # Define a largura desejada (120) e calcula a altura proporcional
+            target_width = 120
+            aspect = orig_h / orig_w
+            target_height = target_width * aspect
+
+            # Cria a imagem com as dimensões corretas e centraliza horizontalmente
+            img = Image(logo_path, width=target_width, height=target_height)
+            img.hAlign = 'CENTER' # Centraliza horizontalmente
+            
             elements.append(img)
-            elements.append(Spacer(1, 10))
+            # A MÁGICA DO ESPAÇO ESTÁ AQUI: Reduzindo de 10 para 1 unidade.
+            elements.append(Spacer(1, 1)) 
 
         elements.append(Paragraph("DEPÓSITO DO ALMOXARIFADO DA OPERAÇÃO ACOLHIDA", title_style))
         elements.append(Spacer(1, 5))
