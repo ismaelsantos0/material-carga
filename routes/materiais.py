@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
-import uuid # <-- Ferramenta do Python para gerar IDs únicos
+import uuid 
 from database import get_db
 import models, schemas
 
@@ -10,13 +10,12 @@ router = APIRouter(prefix="/materiais", tags=["Materiais"])
 @router.post("/")
 def cadastrar_material(dados: schemas.MaterialCreate, db: Session = Depends(get_db)):
     try:
-        # === TRAVA DE AUTOMAÇÃO 1: ID Automático e Local Nulo ===
-        if dados.tipo == "Ferramental de Consumo":
+        # === TRAVA DE AUTOMAÇÃO 1: Mais inteligente agora ===
+        # Procura a palavra "Consumo" em vez do texto exato
+        if dados.tipo and "Consumo" in dados.tipo:
             dados.local = None
-            # Gera um código único (ex: CONS-4F8A2C)
             dados.id_patrimonio = f"CONS-{uuid.uuid4().hex[:6].upper()}"
         
-        # Se NÃO for consumo, o ID é obrigatório (Carga normal)
         elif not dados.id_patrimonio:
             raise HTTPException(status_code=400, detail="O ID do Patrimônio é obrigatório para materiais de Carga.")
 
@@ -43,16 +42,14 @@ def cadastrar_material(dados: schemas.MaterialCreate, db: Session = Depends(get_
 @router.post("/lote")
 def cadastrar_material_lote(dados: schemas.MaterialLoteCreate, db: Session = Depends(get_db)):
     try:
-        # === TRAVA DE AUTOMAÇÃO 2: Lote 100% autônomo ===
-        if dados.tipo == "Ferramental de Consumo":
+        # === TRAVA DE AUTOMAÇÃO 2 ===
+        if dados.tipo and "Consumo" in dados.tipo:
             dados.local = None
 
         materiais_criados = []
         for _ in range(dados.quantidade):
-            # O sistema gera IDs até completar a quantidade pedida
             id_gerado = f"CONS-{uuid.uuid4().hex[:6].upper()}"
             
-            # Garantia dupla para evitar raríssimas colisões do UUID
             while db.query(models.Material).filter(models.Material.id_patrimonio == id_gerado).first():
                 id_gerado = f"CONS-{uuid.uuid4().hex[:6].upper()}"
 
@@ -86,7 +83,8 @@ def listar_materiais(local: Optional[str] = None, db: Session = Depends(get_db))
 @router.put("/{id_patrimonio}")
 def editar_material(id_patrimonio: str, dados: schemas.MaterialCreate, db: Session = Depends(get_db)):
     try:
-        if dados.tipo == "Ferramental de Consumo":
+        # === TRAVA DE AUTOMAÇÃO 3 ===
+        if dados.tipo and "Consumo" in dados.tipo:
             dados.local = None
 
         material = db.query(models.Material).filter(models.Material.id_patrimonio == id_patrimonio).first()
