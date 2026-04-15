@@ -1,12 +1,15 @@
 import io
+import os
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+# Imports para gerar Tabelas e Imagens Profissionais no PDF
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
 from reportlab.lib import colors
 
 from database import engine, Base, SessionLocal, get_db
@@ -14,6 +17,7 @@ from routes import movimentacoes, materiais, militares
 import auth
 import models
 
+# Cria as tabelas no banco de dados automaticamente
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -112,7 +116,7 @@ def relatorio_materiais_local(db: Session = Depends(get_db)):
         relatorio = {}
         for mat in materiais_lista:
             
-            # REGRA NOVA: Ignora se for material de consumo
+            # REGRA: Ignora se for material de consumo
             if mat.tipo and "Consumo" in mat.tipo:
                 continue
 
@@ -137,7 +141,7 @@ def relatorio_materiais_local(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
-# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES ===
+# === ROTA DE EXPORTAÇÃO: PDF DE DEVEDORES (GERAL) ===
 @app.get("/relatorios/devedores_por_militar/pdf", tags=["Relatórios"])
 def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     try:
@@ -200,7 +204,7 @@ def relatorio_devedores_militar_pdf(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
 
-# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO (PDF) ===
+# === ROTA DE EXPORTAÇÃO: PDF DE INVENTÁRIO (POR LOCAL) ===
 @app.get("/relatorios/materiais_por_local/pdf", tags=["Relatórios"])
 def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
     try:
@@ -209,7 +213,7 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
         
         for mat in materiais_lista:
             
-            # REGRA NOVA: Ignora se for material de consumo também no PDF
+            # REGRA: Ignora se for material de consumo também no PDF
             if mat.tipo and "Consumo" in mat.tipo:
                 continue
 
@@ -276,6 +280,102 @@ def relatorio_materiais_local_pdf(db: Session = Depends(get_db)):
         buffer.seek(0)
         
         headers = {"Content-Disposition": "inline; filename=inventario_local.pdf"}
+        return StreamingResponse(buffer, media_type="application/pdf", headers=headers)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
+
+# === NOVA ROTA: GERAR TERMO DE CAUTELA INDIVIDUAL ===
+@app.get("/relatorios/termo_cautela/{id_militar}/pdf", tags=["Relatórios"])
+def gerar_termo_cautela_pdf(id_militar: int, db: Session = Depends(get_db)):
+    try:
+        militar = db.query(models.Militar).filter(models.Militar.id == id_militar).first()
+        if not militar:
+            raise HTTPException(status_code=404, detail="Militar não encontrado")
+
+        nome_responsavel = f"{militar.posto_graduacao} {militar.nome_de_guerra}"
+        materiais = db.query(models.Material).filter(
+            models.Material.situacao == "Em Uso",
+            models.Material.responsavel == nome_responsavel
+        ).all()
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+        elements = []
+        styles = getSampleStyleSheet()
+
+        title_style = ParagraphStyle(
+            name='CenterTitle',
+            parent=styles['Heading2'],
+            alignment=TA_CENTER,
+            fontName='Helvetica-Bold'
+        )
+
+        # 1. Coloca a Logo Centralizada usando o nome correto
+        logo_path = "capa_acolhida.png" # NOME ATUALIZADO AQUI
+        if os.path.exists(logo_path):
+            img = Image(logo_path, width=120, height=120)
+            elements.append(img)
+            elements.append(Spacer(1, 10))
+
+        # 2. Cabeçalho Oficial
+        elements.append(Paragraph("DEPÓSITO DO ALMOXARIFADO DA OPERAÇÃO ACOLHIDA", title_style))
+        elements.append(Spacer(1, 5))
+        elements.append(Paragraph("TERMO DE CAUTELA E RESPONSABILIDADE", title_style))
+        elements.append(Spacer(1, 25))
+
+        # 3. Montagem da Planilha
+        data = [['Material / Patrimônio', 'Data da Apanha', 'Operador (Sistema)', 'Militar Responsável']]
+
+        for mat in materiais:
+            mov = db.query(models.Movimentacao).filter(
+                models.Movimentacao.id_patrimonio == mat.id_patrimonio,
+                models.Movimentacao.tipo_movimentacao == "Cautela",
+                models.Movimentacao.id_militar == militar.id
+            ).order_by(models.Movimentacao.data_hora.desc()).first()
+
+            data_apanha = mov.data_hora.strftime("%d/%m/%Y %H:%M") if mov and mov.data_hora else "N/D"
+            operador = mov.usuario_logado if mov and mov.usuario_logado else "Sistema"
+
+            desc_formatada = f"<b>{mat.id_patrimonio}</b><br/>{mat.descricao}"
+            resp_formatado = f"{nome_responsavel}<br/>Tel: {militar.telefone}"
+
+            data.append([
+                Paragraph(desc_formatada, styles['Normal']),
+                Paragraph(data_apanha, styles['Normal']),
+                Paragraph(operador, styles['Normal']),
+                Paragraph(resp_formatado, styles['Normal'])
+            ])
+
+        # Estilo profissional da Planilha
+        t = Table(data, colWidths=[180, 100, 110, 140])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), 
+            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0,0), (-1,0), 10),
+            ('TOPPADDING', (0,0), (-1,0), 10),
+            ('GRID', (0,0), (-1,-1), 1, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf2f7")])
+        ]))
+
+        elements.append(t)
+        elements.append(Spacer(1, 60)) 
+
+        # 4. Bloco de Assinatura
+        assinatura_style = ParagraphStyle(name='Assinatura', parent=styles['Normal'], alignment=TA_CENTER)
+        
+        elements.append(Paragraph("__________________________________________________________", assinatura_style))
+        elements.append(Spacer(1, 5))
+        elements.append(Paragraph(f"<b>{militar.posto_graduacao} {militar.nome_completo}</b>", assinatura_style))
+        elements.append(Paragraph(f"CPF: {militar.cpf}", assinatura_style))
+
+        doc.build(elements)
+        buffer.seek(0)
+
+        headers = {"Content-Disposition": f"inline; filename=termo_cautela_{militar.nome_de_guerra}.pdf"}
         return StreamingResponse(buffer, media_type="application/pdf", headers=headers)
 
     except Exception as e:
