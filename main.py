@@ -10,7 +10,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
-from reportlab.lib import colors, utils # <-- AQUI ESTÁ A CORREÇÃO
+from reportlab.lib import colors, utils 
 
 from database import engine, Base, SessionLocal, get_db
 from routes import movimentacoes, materiais, militares
@@ -39,19 +39,31 @@ app.include_router(materiais.router)
 app.include_router(militares.router)
 app.include_router(movimentacoes.router)
 
+# === CRIAÇÃO AUTOMÁTICA DOS USUÁRIOS NO BANCO ===
 @app.on_event("startup")
-def criar_admin_padrao():
+def criar_usuarios_padrao():
     db = SessionLocal()
     try:
-        admin_existe = db.query(models.Usuario).filter(models.Usuario.nome_usuario == "admin").first()
-        if not admin_existe:
-            novo_admin = models.Usuario(
-                nome_usuario="admin",
-                senha_hash=auth.obter_hash_senha("admin123"), 
-                regra="Admin"
-            )
-            db.add(novo_admin)
-            db.commit()
+        usuarios_iniciais = [
+            ("admin", "admin123", "Admin"),
+            ("henrique", "henrique123", "Operador"),
+            ("williames", "williames123", "Operador"),
+            ("chefe", "chefe123", "Operador")
+        ]
+
+        for nome, senha, regra in usuarios_iniciais:
+            usuario_existe = db.query(models.Usuario).filter(models.Usuario.nome_usuario == nome).first()
+            
+            if not usuario_existe:
+                novo_usuario = models.Usuario(
+                    nome_usuario=nome,
+                    senha_hash=auth.obter_hash_senha(senha), 
+                    regra=regra
+                )
+                db.add(novo_usuario)
+                print(f"Usuário '{nome}' inserido com sucesso!")
+        
+        db.commit()
     finally:
         db.close()
 
