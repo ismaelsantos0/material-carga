@@ -34,13 +34,14 @@ class Material(Base):
     situacao = Column(String, default="Disponível")
     responsavel = Column(String, nullable=True)
     ativo = Column(Boolean, default=True)
-    observacao = Column(String, nullable=True) # <-- O novo campo está aqui
+    observacao = Column(String, nullable=True)
 
 class Movimentacao(Base):
     __tablename__ = "movimentacoes"
     
     id = Column(Integer, primary_key=True, index=True)
     id_patrimonio = Column(String)
-    id_militar = Column(Integer, nullable=True) # Fica nulo na devolução
+    id_militar = Column(Integer, nullable=True)
     tipo_movimentacao = Column(String)
-    data_hora = Column(DateTime, server_default=func.now()) # Salva a hora exata sozinho
+    data_hora = Column(DateTime, server_default=func.now())
+    usuario_logado = Column(String, default="Sistema")
